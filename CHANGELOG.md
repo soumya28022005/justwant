@@ -2,6 +2,30 @@
 
 Chronological record of features, code changes, bug fixes, database changes, breaking changes and API changes.
 
+## 2026-11-18 (Step 3B-2: Pharmacy profile update)
+- Added PUT /api/v1/pharmacies/:id. Super Admin edits any pharmacy, a PHARMACY user edits only the pharmacy where they are an active OWNER (else 403). Editable: name, nameBn, nameHi, phone, line1, line2, latitude+longitude (together, null clears the pin). status, isPrimary, city and locationId are ignored. Audit logged as PHARMACY_UPDATED.
+
+## 2026-11-18 (Step 3B: Bengali and Hindi pharmacy name)
+- Added nullable Pharmacy.nameBn and Pharmacy.nameHi (2 to 100 characters). POST /api/v1/pharmacies/admin-create accepts them and pharmacy lists and /my return them.
+
+## 2026-11-18 (Step 3B: Bengali and Hindi pharmacy name)
+- Added nullable Pharmacy.nameBn and Pharmacy.nameHi (2 to 100 characters). POST /api/v1/pharmacies/admin-create accepts them and pharmacy lists and /my return them.
+
+## 2026-11-18 (Step 3A-3: Pharmacy + owner account)
+- POST /api/v1/pharmacies/admin-create now creates the pharmacy and its owner login in one transaction (ownerName, ownerEmail, ownerPassword, phone, locationId, line1, optional latitude+longitude). Duplicate phone or email gives 409. Password is hashed and never returned.
+- Removed POST /api/v1/pharmacies/:id/owner. Kept GET /api/v1/pharmacies/my.
+- Tests: pharmacy-create (19) and pharmacy (5) replace pharmacy-owner and pharmacy-location.
+
+## /2026-11-18 (Step 3A-3: Pharmacy + owner account)
+- POST /api/v1/pharmacies/admin-create now creates the pharmacy and its owner login in one transaction (ownerName, ownerEmail, ownerPassword, phone, locationId, line1, optional latitude+longitude). Duplicate phone or email gives 409. Password is hashed and never returned.
+- Removed POST /api/v1/pharmacies/:id/owner. Kept GET /api/v1/pharmacies/my.
+- Tests: pharmacy-create (19) and pharmacy (5) replace pharmacy-owner and pharmacy-location.
+
+## 2026-11-18 (Step 3A-2: Pharmacy owner link)
+- Added POST /api/v1/pharmacies/:id/owner (Super Admin links a PHARMACY role user as OWNER via PharmacyStaff, audit logged, duplicate and second-owner protection) and GET /api/v1/pharmacies/my (PHARMACY user sees only own pharmacies).
+- Role is never changed by this endpoint. No schema change.
+- POST /api/v1/pharmacies/admin-create now also accepts locationId (city, state, pincode optional when locationId is given).
+
 ## 2026-11-18 (Step 3A: Pharmacy location link)
 - Added nullable locationId on Pharmacy linked to Location. When locationId is given, city, state and pincode are copied from the Location master. Old way (city, state, pincode) still works.
 - Pharmacy repository now uses shared prisma client and an explicit field whitelist (no body spread).

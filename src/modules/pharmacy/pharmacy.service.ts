@@ -1,23 +1,65 @@
+import bcrypt from 'bcrypt';
+import { RoleName } from '@prisma/client';
 import { ApiError } from '../../utils/apiError';
 import * as pharmacyRepo from './pharmacy.repository';
 
-export const addPharmacy = async (adminId: string, data: any) => {
-    try {
-        let { city, state, pincode } = data;
+type Actor = { id: string; role: RoleName };
 
-        if (data.locationId) {
-            const loc = await pharmacyRepo.findLocationById(data.locationId);
-            if (!loc) throw new ApiError(404, 'Location not found');
-            if (!loc.isActive) throw new ApiError(400, 'Location is inactive');
-            // city/state/pincode always come from the official Location master
-            city = loc.city;
-            state = loc.state;
-            pincode = loc.pincode;
+export const addPharmacy = async (actor: Actor, data: any) => {
+    try {
+        const ownerEmail = String(data.ownerEmail).trim().toLowerCase();
+        const phone = String(data.phone).trim();
+
+        // 1. Location must exist and be active; city/state/pincode always come from it
+        const loc = await pharmacyRepo.findLocationById(data.locationId);
+        if (!loc) throw new ApiError(404, 'Location not found');
+        if (!loc.isActive) throw new ApiError(400, 'Location is inactive');
+
+        // 2. PHARMACY role must exist in the database
+        const role = await pharmacyRepo.findRoleByName('PHARMACY');
+        if (!role) throw new ApiError(500, 'Role setup incomplete in database');
+
+        // 3. Owner phone or email must not belong to any existing user
+        if (await pharmacyRepo.findUserByPhoneOrEmail(phone, ownerEmail)) {
+            throw new ApiError(409, 'A user with this phone or email already exists');
         }
 
-        return await pharmacyRepo.createPharmacy(adminId, { ...data, city, state, pincode });
+        // 4. Hash the password (the plain password is never stored or returned)
+        const passwordHash = await bcrypt.hash(data.ownerPassword, 10);
+
+        // 5. One transaction creates owner, pharmacy, link and audit log
+        const result = await pharmacyRepo.createPharmacyWithOwner(
+            {
+                name: String(data.name).trim(),
+                nameBn: data.nameBn ? String(data.nameBn).trim() : null,
+                nameHi: data.nameHi ? String(data.nameHi).trim() : null,
+                phone,
+                email: ownerEmail,
+                line1: String(data.line1).trim(),
+                line2: data.line2 ? String(data.line2).trim() : null,
+                city: loc.city,
+                state: loc.state,
+                pincode: loc.pincode,
+                locationId: loc.id,
+                latitude: data.latitude ?? null,
+                longitude: data.longitude ?? null,
+                isPrimary: data.isPrimary ?? false,
+            },
+            {
+                fullName: String(data.ownerName).trim(),
+                phone,
+                email: ownerEmail,
+                passwordHash,
+                roleId: role.id,
+            },
+            actor
+        );
+
+        return { ...result.pharmacy, owner: result.owner };
     } catch (error: any) {
         if (error instanceof ApiError) throw error;
+        // two requests at the same moment: the database unique constraint catches the second one
+        if (error?.code === 'P2002') throw new ApiError(409, 'A user with this phone or email already exists');
         console.error('Create pharmacy error:', error);
         throw new ApiError(500, 'Failed to create pharmacy');
     }
@@ -35,4 +77,42 @@ export const makePrimary = async (pharmacyId: string) => {
 
 export const fetchPharmacies = async () => {
     return await pharmacyRepo.getAllPharmacies();
+};
+
+export const fetchMyPharmacies = async (userId: string) => {
+    return await pharmacyRepo.findPharmaciesByStaffUser(userId);
+};
+
+// ---------------- Step 3B-2: profile update ----------------
+
+export const updatePharmacy = async (id: string, body: any, actor: Actor) => {
+    const existing = await pharmacyRepo.findPharmacyById(id);
+    if (!existing) throw new ApiError(404, 'Pharmacy not found');
+    if (existing.status !== 'ACTIVE') throw new ApiError(400, 'Pharmacy is not ACTIVE');
+
+    // Super Admin can edit any pharmacy. A PHARMACY user can edit only the pharmacy where they are an active OWNER.
+    if (actor.role !== 'SUPER_ADMIN') {
+        const link = await pharmacyRepo.findActiveOwnerLink(actor.id, id);
+        if (!link) throw new ApiError(403, 'You can only edit your own pharmacy');
+    }
+
+    // explicit whitelist: status, isPrimary, city, locationId and anything else in the body are ignored
+    const data: any = {};
+    if (body.name !== undefined) data.name = String(body.name).trim();
+    if (body.nameBn !== undefined) data.nameBn = body.nameBn ? String(body.nameBn).trim() : null;
+    if (body.nameHi !== undefined) data.nameHi = body.nameHi ? String(body.nameHi).trim() : null;
+    if (body.phone !== undefined) data.phone = String(body.phone).trim();
+    if (body.line1 !== undefined) data.line1 = String(body.line1).trim();
+    if (body.line2 !== undefined) data.line2 = body.line2 ? String(body.line2).trim() : null;
+    if (body.latitude !== undefined) {
+        data.latitude = body.latitude;
+        data.longitude = body.longitude;
+    }
+
+    try {
+        return await pharmacyRepo.updatePharmacyWithAudit(id, existing, data, actor);
+    } catch (error: any) {
+        console.error('Update pharmacy error:', error);
+        throw new ApiError(500, 'Failed to update pharmacy');
+    }
 };
